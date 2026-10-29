@@ -26,6 +26,7 @@ from .base import Base
 from .db import Db
 from .gsrs import Gsrs
 from .http import Http
+from .opsin import Opsin, cml_to_molfile
 
 __all__ = [
     "DEFAULT_SESSION_COOKIE_NAME",
@@ -43,6 +44,7 @@ __all__ = [
     "NoProxyConfig",
     "OAuth2AuthHandler",
     "OAuth2Token",
+    "Opsin",
     "ProxyConfig",
     "SessionCookieAuthHandler",
     "SsoHeaderAuthHandler",
@@ -51,5 +53,6 @@ __all__ = [
     "ValidationMessage",
     "ValidationResponse",
     "WhoAmIResponse",
+    "cml_to_molfile",
     "compute_gsrs_token",
 ]

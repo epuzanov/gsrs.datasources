@@ -19,6 +19,8 @@ namespace package.
   and API key.
 - `OAuth2Token`: an OAuth2 bearer token provider with caching and automatic refresh.
 - `Db`: a placeholder database client stub for future implementation.
+- `Opsin`: a client for the [OPSIN](https://www.ebi.ac.uk/opsin/) IUPAC name
+  resolver, which turns a systematic name into a public GSRS chemical substance.
 - `ValidationResponse`, `ValidationMessage`, and `ValidationLink`: pydantic models for GSRS validation output.
 
 `resourceType` is a `gsrs.model` class, and it controls both the endpoint the
@@ -57,7 +59,7 @@ downwards. Every package is decomposed into one module per concern:
 | `gsrs.responses` | `http`, `whoami`, `validation` | Data containers: the transport-level `HttpResponse` plus the pydantic GSRS API models (`WhoAmIResponse`, `ValidationResponse`, ...). |
 | `gsrs.exceptions` | `exceptions` | Dependency-free exception hierarchy (`ClientError`, `HttpRequestError`, ...) that any layer may import. |
 | `gsrs.auth` | `base`, `tokens`, `basic`, `token_header`, `api_key`, `sso`, `session`, `bearer`, `oauth2` | The GSRS authentication handlers, `compute_gsrs_token`, and the `OAuth2Token` provider. Builds on `transport` and `exceptions`. |
-| `gsrs.client` | `base`, `http`, `gsrs`, `db` | `Base` (the abstract contract), `Http` (requests and pagination), `Gsrs` (GSRS operations), and the `Db` stub, on top of `auth`, `responses`, and `transport`. |
+| `gsrs.client` | `base`, `http`, `gsrs`, `db`, `opsin` | `Base` (the abstract contract), `Http` (requests and pagination), `Gsrs` (GSRS operations), the `Db` stub, and `Opsin` (IUPAC name resolution), on top of `auth`, `responses`, and `transport`. |
 
 `gsrs.client.http` still re-exports the public names it builds on, so
 imports such as `from gsrs.client.http import AuthHandler` keep working.
@@ -119,6 +121,86 @@ raw_record = raw_client.get(identifiers[0])
 
 `raw_record` is the plain dictionary returned by the API; `get`, `iterate`,
 `save`, and `approve` all return raw JSON in this mode.
+
+## Resolving IUPAC names with OPSIN
+
+`Opsin` is a second backend. It does not talk to GSRS at all: it sends a
+systematic name to the OPSIN resolver, which interprets IUPAC nomenclature and
+returns a structure. There is no identifier to fetch and nothing to write, so
+the name is the identifier and `get` and `search` are the operations that make
+sense.
+
+```python
+from gsrs.client import Opsin
+from gsrs.model import ChemicalSubstance
+
+opsin = Opsin(resource_type=ChemicalSubstance)
+
+substance = opsin.get("2-acetoxybenzoic acid")
+
+print(substance.is_public())          # True
+print(substance.structure.molfile)    # V2000 connection table
+print(substance.names[0].name)        # 2-acetoxybenzoic acid
+print(substance.references[0].tags)   # ['PUBLIC_DOMAIN_RELEASE']
+
+opsin.close()
+```
+
+`get` takes the IUPAC name as the identifier; the `version` argument is
+accepted for compatibility with the `Base` contract and ignored, because OPSIN
+keeps no record history. When OPSIN cannot interpret the name, `get` returns
+`None` and `search` returns an empty list. A name that resolves is its own
+search result:
+
+```python
+opsin.search("2-acetoxybenzoic acid")  # ['2-acetoxybenzoic acid']
+opsin.search("aspirin")                # [] - OPSIN only reads systematic names
+opsin.get("aspirin")                   # None
+```
+
+Like every client, what `get` returns follows `resource_type`. Without one the
+payload is a plain `dict`, which is useful when `gsrs.model` is not installed:
+
+```python
+raw = Opsin()
+payload = raw.get("benzene")           # dict
+payload["structure"]["molfile"]        # V2000 connection table
+raw.close()
+```
+
+The returned substance is public at every level, so it can be published without
+further edits:
+
+- `access` is empty on the substance, on its structure, and on its moiety.
+- `names` holds the requested IUPAC string typed as a systematic name, and it
+  cites the release reference.
+- `references` holds one `Reference` with `publicDomain=True` and the
+  `PUBLIC_DOMAIN_RELEASE` tag, which the structure cites as well.
+- `structure` carries the MOL file, the SMILES, the InChI, and the InChIKey.
+- `notes` holds any warnings OPSIN reported while resolving the name.
+
+The client speaks OPSIN's documented [web
+service](https://www.ebi.ac.uk/opsin/#webservice): the base URL is
+`https://www.ebi.ac.uk/opsin/ws` and a lookup is a `GET` to
+`{base}/{CHEMICAL_NAME}.{EXTENSION}` with the name URL-encoded. The documented
+extensions are `.smi`, `.cml` and `.no2d.cml`, `.stdinchi`, `.stdinchikey`,
+`.inchi`, `.png`, `.svg`, and `.json`. None of them is MOL, so the client asks
+for `.json` and converts its `cml` member locally: CML carries 2D coordinates,
+element types, and bond orders, which is everything a V2000 connection table
+needs. That CML already lists every atom, hydrogens included, so the conversion
+is a direct transcription:
+
+```python
+from gsrs.client import cml_to_molfile
+
+cml = '<cml ...><molecule><atomArray><atom id="a1" elementType="C" x2="0" y2="0"/></atomArray></molecule></cml>'
+print(cml_to_molfile(cml))
+```
+
+OPSIN is read-only, so `iterate`, `save`, `validate`, and `approve` raise
+`NotImplementedError`. An uninterpretable name is a normal outcome and not an
+error; a transport failure, an unexpected status, or a malformed CML document
+raises instead (`OpsinParseError` or `ApiResponseError`).
 
 ## Authentication
 
