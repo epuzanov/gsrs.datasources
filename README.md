@@ -127,8 +127,8 @@ raw_record = raw_client.get(identifiers[0])
 `Opsin` is a second backend. It does not talk to GSRS at all: it sends a
 systematic name to the OPSIN resolver, which interprets IUPAC nomenclature and
 returns a structure. There is no identifier to fetch and nothing to write, so
-the name is the identifier and `get` and `search` are the operations that make
-sense.
+the name is the identifier and `get`, `search`, and `iterate` are the
+operations that make sense.
 
 ```python
 from gsrs.client import Opsin
@@ -149,13 +149,28 @@ opsin.close()
 `get` takes the IUPAC name as the identifier; the `version` argument is
 accepted for compatibility with the `Base` contract and ignored, because OPSIN
 keeps no record history. When OPSIN cannot interpret the name, `get` returns
-`None` and `search` returns an empty list. A name that resolves is its own
-search result:
+`None`. `search` returns the requested name only when it converts into a
+structure, so it is its own single result; a name OPSIN cannot interpret yields
+nothing, and a blank query returns `[]` without a request:
 
 ```python
 opsin.search("2-acetoxybenzoic acid")  # ['2-acetoxybenzoic acid']
 opsin.search("aspirin")                # [] - OPSIN only reads systematic names
+opsin.search("   ")                    # [] - no request is made
 opsin.get("aspirin")                   # None
+```
+
+`iterate` is `get` returned as an iterator, and the query is a single name, the
+same as every other client. It yields one element — exactly what `get` returns
+for that name, including `None` when the name does not convert — and `None` or a
+blank query yields nothing, because there is no record store to page through:
+
+```python
+for substance in opsin.iterate("benzene"):
+    print(substance.names[0].name)     # benzene
+
+list(opsin.iterate("aspirin"))         # [None] - get("aspirin") is None too
+list(opsin.iterate())                  # []
 ```
 
 Like every client, what `get` returns follows `resource_type`. Without one the
@@ -197,7 +212,7 @@ cml = '<cml ...><molecule><atomArray><atom id="a1" elementType="C" x2="0" y2="0"
 print(cml_to_molfile(cml))
 ```
 
-OPSIN is read-only, so `iterate`, `save`, `validate`, and `approve` raise
+OPSIN is read-only, so `save`, `validate`, and `approve` raise
 `NotImplementedError`. An uninterpretable name is a normal outcome and not an
 error; a transport failure, an unexpected status, or a malformed CML document
 raises instead (`OpsinParseError` or `ApiResponseError`).

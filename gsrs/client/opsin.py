@@ -178,11 +178,12 @@ class Opsin(Http):
     """Client for the OPSIN IUPAC name resolver.
 
     A name is the identifier: :meth:`get` returns the public substance a name
-    resolves to and :meth:`search` returns the name when it resolves. Payloads
-    are cast to ``resource_type`` exactly as in :class:`~gsrs.client.Base`, so
-    :meth:`get` returns a plain ``dict`` unless a model class was supplied.
-    OPSIN is read-only, so ``iterate``, ``save``, ``validate`` and ``approve``
-    raise :class:`NotImplementedError`.
+    resolves to, :meth:`search` returns the name when it converts, and
+    :meth:`iterate` yields :meth:`get` for a name. Payloads are cast to
+    ``resource_type`` exactly as in :class:`~gsrs.client.Base`, so they are
+    plain ``dict`` objects unless a model class was supplied. OPSIN is
+    read-only, so ``save``, ``validate`` and ``approve`` raise
+    :class:`NotImplementedError`.
 
     The returned substance is public at every level: an empty ``access`` list on
     the substance and on the structure, a ``PUBLIC_DOMAIN_RELEASE`` reference
@@ -340,13 +341,24 @@ class Opsin(Http):
         return self._cast_payload(self._build_substance(id, result))
 
     def search(self, query: str | None = None) -> list[str]:
-        """Return ``query`` when OPSIN resolves it, otherwise an empty list."""
-        if not query:
+        """Return ``query`` when OPSIN converts it into a structure.
+
+        OPSIN only reads systematic names, so a trivial name such as ``aspirin``
+        yields no match. A blank query resolves to nothing without a request.
+        """
+        if not query or not query.strip():
             return []
         return [query] if self._resolve(query) is not None else []
 
     def iterate(self, query: str | None = None) -> Any:
-        raise NotImplementedError(self.NOT_IMPLEMENTED_MESSAGE)
+        """Yield the result of :meth:`get` for the single name ``query``.
+
+        A query is one IUPAC name, so at most one substance is yielded and it is
+        exactly what :meth:`get` returns for that name. ``None`` or a blank
+        query yields nothing because there is no record store to page through.
+        """
+        if query and query.strip():
+            yield self.get(query)
 
     def save(self, obj: Any) -> Any:
         raise NotImplementedError(self.NOT_IMPLEMENTED_MESSAGE)

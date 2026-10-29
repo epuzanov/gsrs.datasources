@@ -93,6 +93,23 @@ def opsin_session(result=OPSIN_SUCCESS, status_code=200):
     )
 
 
+def names_session(resolvable, unresolvable=()):
+    """Session that resolves only the names in ``resolvable``.
+
+    The name is the last path segment of the URL, without the suffix.
+    """
+
+    def handler(method, url, **kwargs):
+        name = urlparse(url).path.rsplit("/", 1)[-1].removesuffix(".json")
+        if name in resolvable:
+            return FakeResponse(OPSIN_SUCCESS, url=url)
+        if name in unresolvable:
+            return FakeResponse(OPSIN_FAILURE, url=url)
+        raise AssertionError(f"unexpected lookup: {name}")
+
+    return FakeSession(handler)
+
+
 class FakeSubstance:
     """Minimal stand-in for ``gsrs.model.ChemicalSubstance``."""
 
@@ -293,7 +310,68 @@ class OpsinClientTests(unittest.TestCase):
 
         self.assertEqual(client.search(), [])
         self.assertEqual(client.search(""), [])
+        self.assertEqual(client.search("   "), [])
         self.assertEqual(session.calls, [])
+
+    def test_iterate_yields_a_substance_for_a_single_name(self):
+        client = Opsin(session=names_session({"benzene"}), resource_type=FakeSubstance)
+
+        substances = list(client.iterate("benzene"))
+
+        self.assertEqual(len(substances), 1)
+        self.assertEqual(substances[0].names[0]["name"], "benzene")
+
+    def test_iterate_yields_get_for_the_same_name(self):
+        session = names_session({"benzene"})
+        client = Opsin(session=session, resource_type=FakeSubstance)
+
+        expected = client.get("benzene")
+        actual = list(client.iterate("benzene"))[0]
+
+        self.assertIsInstance(actual, FakeSubstance)
+        # Reference ids are freshly minted per call, so compare the stable parts.
+        self.assertEqual(
+            (actual.names[0]["name"], actual.names[0]["type"], actual.access),
+            (expected.names[0]["name"], expected.names[0]["type"], expected.access),
+        )
+
+    def test_iterate_yields_none_when_the_name_does_not_convert(self):
+        client = Opsin(session=names_session(set(), unresolvable={"aspirin"}))
+
+        self.assertEqual(list(client.iterate("aspirin")), [None])
+
+    def test_iterate_is_lazy(self):
+        session = names_session({"benzene"})
+        client = Opsin(session=session)
+
+        results = client.iterate("benzene")
+
+        # Nothing is fetched until the iterator is consumed.
+        self.assertEqual(session.calls, [])
+        self.assertEqual(len(list(results)), 1)
+
+    def test_iterate_yields_dicts_without_a_resource_type(self):
+        client = Opsin(session=names_session({"benzene"}))
+
+        substances = list(client.iterate("benzene"))
+
+        self.assertIsInstance(substances[0], dict)
+        self.assertEqual(substances[0]["substanceClass"], "chemical")
+
+    def test_iterate_without_a_query_yields_nothing(self):
+        session = opsin_session()
+        client = Opsin(session=session)
+
+        self.assertEqual(list(client.iterate()), [])
+        self.assertEqual(list(client.iterate("   ")), [])
+        self.assertEqual(session.calls, [])
+
+    def test_iterate_raises_once_closed(self):
+        client = Opsin(session=opsin_session())
+        client.close()
+
+        with self.assertRaises(Exception):
+            client.iterate("benzene")
 
     def test_raises_for_an_unexpected_status(self):
         client = Opsin(session=opsin_session({"status": "ERROR", "message": "boom"}, status_code=500))
@@ -334,7 +412,6 @@ class OpsinClientTests(unittest.TestCase):
         client = Opsin(session=opsin_session())
 
         for call in (
-            lambda: client.iterate("benzene"),
             lambda: client.save({}),
             lambda: client.validate({}),
             lambda: client.approve("benzene"),
