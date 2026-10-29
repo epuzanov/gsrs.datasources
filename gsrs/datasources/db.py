@@ -1,14 +1,32 @@
+"""Placeholder database datasource.
+
+The class reserves the :class:`Base` contract for a future SQL implementation;
+no method here is implemented yet.
+"""
+
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator
 from typing import Any
+
+from pydantic import BaseModel
 
 from .base import Base
 
+__all__ = ["Db"]
+
+NOT_IMPLEMENTED_MESSAGE = "Db datasource is not implemented yet."
+
 
 class Db(Base):
-    def __init__(self, resourceType: str, **kwargs: Any) -> None:
-        super().__init__(resourceType=resourceType, **kwargs)
+    """Stub datasource for a database backend.
+
+    Every operation raises :class:`NotImplementedError`; the class exists so the
+    datasource contract has a documented placeholder.
+    """
+
+    def __init__(self, resource_type: type | None = None, **kwargs: Any) -> None:
+        super().__init__(resource_type=resource_type, **kwargs)
         self._closed = False
 
     def close(self) -> None:
@@ -18,50 +36,35 @@ class Db(Base):
         self,
         id: str,
         version: str | None = None,
-        raw: bool = False,
-        template: Mapping[str, Any] | str | None = None,
-        *,
-        view: str | None = None,
     ) -> Any:
-        raise NotImplementedError("Db datasource is not implemented yet.")
+        raise NotImplementedError(NOT_IMPLEMENTED_MESSAGE)
 
     def search(
         self,
         query: str | None = None,
-        *,
-        page_size: int = 50,
-        params: Mapping[str, Any] | None = None,
-        template: Mapping[str, Any] | str | None = None,
-        view: str | None = None,
     ) -> list[str]:
-        raise NotImplementedError("Db datasource is not implemented yet.")
+        raise NotImplementedError(NOT_IMPLEMENTED_MESSAGE)
 
     def iterate(
         self,
         query: str | None = None,
-        *,
-        raw: bool = False,
-        page_size: int = 50,
-        params: Mapping[str, Any] | None = None,
-        template: Mapping[str, Any] | str | None = None,
-        view: str | None = None,
     ) -> Iterator[Any]:
-        raise NotImplementedError("Db datasource is not implemented yet.")
+        raise NotImplementedError(NOT_IMPLEMENTED_MESSAGE)
 
     def save(
         self,
-        obj: Any,
-        update: bool = False,
-        *,
-        view: str | None = None,
+        obj: BaseModel | dict[str, Any],
     ) -> Any:
-        raise NotImplementedError("Db datasource is not implemented yet.")
+        raise NotImplementedError(NOT_IMPLEMENTED_MESSAGE)
 
     def validate(
         self,
-        obj: Any,
-        update: bool = False,
-        *,
-        view: str | None = None,
+        obj: BaseModel | dict[str, Any],
     ) -> Any:
-        raise NotImplementedError("Db datasource is not implemented yet.")
+        raise NotImplementedError(NOT_IMPLEMENTED_MESSAGE)
+
+    def approve(
+        self,
+        id: str,
+    ) -> Any:
+        raise NotImplementedError(NOT_IMPLEMENTED_MESSAGE)

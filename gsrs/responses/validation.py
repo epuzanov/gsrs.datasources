@@ -1,8 +1,16 @@
+"""Pydantic models for the GSRS substance validation payload."""
+
 from __future__ import annotations
 
 from typing import Any
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
+
+__all__ = [
+    "ValidationLink",
+    "ValidationMessage",
+    "ValidationResponse",
+]
 
 
 class ValidationLink(BaseModel):

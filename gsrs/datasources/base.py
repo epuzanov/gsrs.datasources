@@ -1,60 +1,56 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator
+from contextlib import suppress
 from typing import Any
 
-from .exceptions import ResourceTypeError
+from pydantic import BaseModel
 
-RESOURCE_MAP: dict[str, dict[str, str]] = {
-    "Substance": {
-        "path": "substances",
-        "id_field": "uuid",
-        "model_name": "Substance",
-    },
-    "Product": {
-        "path": "products",
-        "id_field": "uuid",
-        "model_name": "Product",
-    },
-}
+__all__ = ["Base"]
+
 
 class Base(ABC):
-    RESOURCE_MAP = RESOURCE_MAP
+    """Common datasource contract.
 
-    def __init__(self, resourceType: str, **kwargs: Any) -> None:
-        self._logger = kwargs.get("logger", None)
-        self._dsname = kwargs.get("dsName", "COMMON")
-        self._codeSystem = kwargs.get("codeSystem", "Unknown")
-        self._resourceType = resourceType
-        self._resource = self.get_resource_config(resourceType)
+    ``resourceType`` is the model class that API payloads are cast to. When it
+    is ``None`` the datasource is untyped: every payload is returned as raw
+    JSON and requests are resolved against ``base_url`` without an entity
+    segment. When a class is given, payloads are cast to that class.
+    """
+
+    def __init__(
+            self,
+            resource_type: type | None = None,
+            resource_path: str | None = None,
+            id_field: str | None = None,
+            logger: Any | None = None,
+            **kwargs: Any,
+    ) -> None:
+        # ``resourceType`` is the historical camelCase alias for
+        # ``resource_type`` and is what the documentation uses.
+        if resource_type is None and "resourceType" in kwargs:
+            resource_type = kwargs.pop("resourceType")
+        self.logger = logger
+        self.resource_type = resource_type
+        if resource_path is None and callable(getattr(resource_type, "_resource_path", None)):
+            resource_path = resource_type._resource_path()
+        # An empty path means raw mode: requests resolve against ``base_url``.
+        self.resource_path = (resource_path or "").strip("/")
+        if id_field is None and callable(getattr(resource_type, "_id_field", None)):
+            id_field = resource_type._id_field()
+        self.id_field = id_field
 
     def __del__(self) -> None:
-        try:
+        # Interpreter shutdown may already have cleared what ``close`` needs.
+        with suppress(Exception):
             self.close()
-        except Exception:
-            pass
 
-    @classmethod
-    def get_resource_config(cls, resourceType: str) -> dict[str, str]:
-        try:
-            return cls.RESOURCE_MAP[resourceType]
-        except KeyError as exc:
-            supported = ", ".join(sorted(cls.RESOURCE_MAP))
-            raise ResourceTypeError(
-                f"Unsupported resourceType {resourceType!r}. Supported values: {supported}."
-            ) from exc
-
-    def extend(self, obj: Any) -> Any:
-        return obj
-
-    @property
-    def resourceType(self) -> str:
-        return self._resourceType
-
-    @property
-    def resource(self) -> dict[str, str]:
-        return self._resource
+    def _cast_payload(self, payload: Any) -> Any:
+        """Cast ``payload`` to the configured model class, or pass it through."""
+        if self.resource_type is None or payload is None:
+            return payload
+        return self.resource_type.model_validate(payload)
 
     @abstractmethod
     def close(self) -> None:
@@ -65,22 +61,13 @@ class Base(ABC):
         self,
         id: str,
         version: str | None = None,
-        raw: bool = False,
-        template: Mapping[str, Any] | str | None = None,
-        *,
-        view: str | None = None,
     ) -> Any:
-        """Fetch one record from the datasource."""
+        """Fetch one record, cast to ``resource_type`` unless it is ``None``."""
 
     @abstractmethod
     def search(
         self,
         query: str | None = None,
-        *,
-        page_size: int = 50,
-        params: Mapping[str, Any] | None = None,
-        template: Mapping[str, Any] | str | None = None,
-        view: str | None = None,
     ) -> list[str]:
         """Return matching record identifiers."""
 
@@ -88,31 +75,27 @@ class Base(ABC):
     def iterate(
         self,
         query: str | None = None,
-        *,
-        raw: bool = False,
-        page_size: int = 50,
-        params: Mapping[str, Any] | None = None,
-        template: Mapping[str, Any] | str | None = None,
-        view: str | None = None,
     ) -> Iterator[Any]:
-        """Yield matching records lazily."""
+        """Yield matching records, cast to ``resource_type`` unless it is ``None``."""
 
     @abstractmethod
     def save(
         self,
-        obj: Any,
-        update: bool = False,
-        *,
-        view: str | None = None,
+        obj: BaseModel | dict[str, Any],
     ) -> Any:
-        """Create or update a record in the datasource."""
+        """Create or update a record, cast to ``resource_type`` unless it is ``None``."""
 
     @abstractmethod
     def validate(
         self,
-        obj: Any,
-        update: bool = False,
-        *,
-        view: str | None = None,
+        obj: BaseModel | dict[str, Any],
     ) -> Any:
         """Validate a record payload without saving it."""
+
+    @abstractmethod
+    def approve(
+        self,
+        id: str,
+    ) -> Any:
+        """Approve the record, cast to ``resource_type`` unless it is ``None``."""
+

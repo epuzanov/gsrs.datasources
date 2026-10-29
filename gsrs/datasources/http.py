@@ -1,24 +1,85 @@
+"""HTTP datasource base and urllib session wrapper.
+
+This module is the top layer of the HTTP stack: :class:`UrlLibSession` sends
+requests through an :class:`~urllib.request.OpenerDirector` and :class:`Http`
+adds request and error helpers on top of it. Pagination is GSRS specific and
+lives in :mod:`gsrs.datasources.gsrs`.
+
+Proxy and TLS plumbing lives in :mod:`gsrs.transport`, the response containers
+in :mod:`gsrs.responses`, and the authentication handlers and token provider in
+:mod:`gsrs.auth`. Those names are re-exported here so existing imports such as
+``from gsrs.datasources.http import AuthHandler`` keep working.
+"""
+
 from __future__ import annotations
 
-import base64
 import json
-from dataclasses import dataclass
+from collections.abc import Iterator, Mapping
 from json import JSONDecodeError
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import parse_qs, urlencode, urljoin, urlparse
-from urllib.request import OpenerDirector, Request, build_opener
+from urllib.parse import parse_qs, quote, urlencode, urljoin, urlparse
+from urllib.request import Request
+
+from pydantic import BaseModel
+
+from gsrs.auth import (
+    DEFAULT_SESSION_COOKIE_NAME,
+    DEFAULT_TOKEN_TIME_RESOLUTION_MS,
+    ApiKeyAuthHandler,
+    AuthHandler,
+    BasicAuthHandler,
+    BearerAuthHandler,
+    ComputedTokenAuthHandler,
+    LegacyAuthHandler,
+    OAuth2AuthHandler,
+    OAuth2Token,
+    SessionCookieAuthHandler,
+    SsoHeaderAuthHandler,
+    TokenAuthHandler,
+    compute_gsrs_token,
+)
+from gsrs.exceptions import (
+    ApiResponseError,
+    DatasourceError,
+    HttpRequestError,
+    HttpTransportError,
+    ResourceTypeError,
+)
+from gsrs.responses import HttpResponse
+from gsrs.transport import (
+    NoProxyConfig,
+    ProxyConfig,
+    _build_url_opener,
+    _DelegatingHandler,
+    _normalize_no_proxy,
+    _normalize_proxies,
+    _parse_set_cookie_headers,
+)
 
 from .base import Base
-from .exceptions import ApiResponseError, DatasourceError, HttpRequestError, HttpTransportError
 
-
-@dataclass
-class HttpResponse:
-    status_code: int
-    url: str
-    headers: dict[str, str]
-    text: str
+__all__ = [
+    "DEFAULT_SESSION_COOKIE_NAME",
+    "DEFAULT_TOKEN_TIME_RESOLUTION_MS",
+    "ApiKeyAuthHandler",
+    "AuthHandler",
+    "BasicAuthHandler",
+    "BearerAuthHandler",
+    "ComputedTokenAuthHandler",
+    "Http",
+    "HttpResponse",
+    "LegacyAuthHandler",
+    "NoProxyConfig",
+    "OAuth2AuthHandler",
+    "OAuth2Token",
+    "ProxyConfig",
+    "SessionCookieAuthHandler",
+    "SsoHeaderAuthHandler",
+    "TokenAuthHandler",
+    "UrlLibSession",
+    "compute_gsrs_token",
+]
 
 
 class UrlLibSession:
@@ -28,14 +89,36 @@ class UrlLibSession:
         self,
         *,
         headers: dict[str, str] | None = None,
-        auth: str | tuple[str, str] | None = None,
-        legacy_auth: tuple[str, str] | None = None,
-        opener: OpenerDirector | None = None,
+        auth: AuthHandler | None = None,
+        verify_ssl: bool = True,
+        proxy: ProxyConfig = None,
+        no_proxy: NoProxyConfig = None,
+        opener: Any = None,
     ) -> None:
+        if auth is not None and not isinstance(auth, AuthHandler):
+            raise TypeError("auth must be an AuthHandler instance.")
+
         self._headers = dict(headers or {})
-        self._auth_header = self._build_auth_header(auth)
-        self._legacy_auth_headers = self._build_legacy_auth_headers(legacy_auth)
-        self._opener = opener or build_opener()
+        self._auth = auth
+        self._auth_handlers = [auth] if auth is not None else []
+        self.verify_ssl = verify_ssl
+        self.proxy = _normalize_proxies(proxy)
+        self.no_proxy = _normalize_no_proxy(no_proxy)
+        if opener is None:
+            self._opener = _build_url_opener(
+                *self._auth_handlers,
+                verify_ssl=verify_ssl,
+                proxy=proxy,
+                no_proxy=no_proxy,
+            )
+        else:
+            # A caller supplied opener owns its transport configuration,
+            # including proxies.
+            self._opener = _build_url_opener(
+                *self._auth_handlers,
+                _DelegatingHandler(opener),
+                verify_ssl=verify_ssl,
+            )
         self._closed = False
 
     def close(self) -> None:
@@ -48,86 +131,106 @@ class UrlLibSession:
         url: str,
         *,
         headers: dict[str, str] | None = None,
-        json_body: Any = None,
+        data: bytes | None = None,
         timeout: float | None = None,
     ) -> HttpResponse:
         if self._closed:
             raise RuntimeError("HTTP session is closed.")
 
         request_headers = dict(self._headers)
-        if self._auth_header and "Authorization" not in request_headers:
-            request_headers["Authorization"] = self._auth_header
-        for key, value in self._legacy_auth_headers.items():
-            request_headers.setdefault(key, value)
         if headers:
             request_headers.update(headers)
 
-        data = None
-        if json_body is not None:
-            data = json.dumps(json_body).encode("utf-8")
-            request_headers.setdefault("Content-Type", "application/json")
+        return self._send(
+            method,
+            url,
+            data=data,
+            headers=request_headers,
+            timeout=timeout,
+        )
 
-        request = Request(url=url, data=data, headers=request_headers, method=method.upper())
+    def _send(
+        self,
+        method: str,
+        url: str,
+        *,
+        data: bytes | None,
+        headers: dict[str, str],
+        timeout: float | None,
+    ) -> HttpResponse:
+        request = Request(url=url, data=data, headers=headers, method=method.upper())
 
         try:
             with self._opener.open(request, timeout=timeout) as response:
                 charset = response.headers.get_content_charset("utf-8")
-                return HttpResponse(
+                http_response = HttpResponse(
                     status_code=getattr(response, "status", response.getcode()),
                     url=response.geturl(),
                     headers=dict(response.headers.items()),
                     text=response.read().decode(charset),
+                    cookies=_parse_set_cookie_headers(response.headers),
                 )
+                self._capture_cookies(http_response)
+                return http_response
         except HTTPError as exc:
             charset = exc.headers.get_content_charset("utf-8") if exc.headers else "utf-8"
-            return HttpResponse(
+            http_response = HttpResponse(
                 status_code=exc.code,
                 url=exc.geturl(),
                 headers=dict(exc.headers.items()) if exc.headers else {},
                 text=exc.read().decode(charset),
+                cookies=_parse_set_cookie_headers(exc.headers),
             )
+            self._capture_cookies(http_response)
+            return http_response
         except URLError as exc:
             raise HttpTransportError(f"HTTP request failed for {url}: {exc.reason}") from exc
 
-    @staticmethod
-    def _build_auth_header(auth: str | tuple[str, str] | None) -> str | None:
-        if auth is None:
-            return None
-        if isinstance(auth, str):
-            return auth
-        username, password = auth
-        token = base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
-        return f"Basic {token}"
-
-    @staticmethod
-    def _build_legacy_auth_headers(
-        legacy_auth: tuple[str, str] | None,
-    ) -> dict[str, str]:
-        if legacy_auth is None:
-            return {}
-        username, password = legacy_auth
-        return {
-            "auth-username": username,
-            "auth-password": password,
-        }
+    def _capture_cookies(self, response: HttpResponse) -> None:
+        """Offer response cookies to the auth handler for session reuse."""
+        store = getattr(self._auth, "store_cookies", None)
+        if callable(store) and response.cookies:
+            store(response.cookies)
 
 
 class Http(Base):
+    """Reusable HTTP datasource base built on the standard library.
+
+    Requests are sent through :class:`UrlLibSession`. Set ``proxy`` to a proxy
+    URL (or a mapping of scheme to proxy URL) to route them through a proxy,
+    and ``no_proxy`` to list hosts that bypass it. Both settings are also
+    honoured by :class:`OAuth2Token`.
+    """
+
     def __init__(
         self,
-        *,
         base_url: str,
+        resource_type: type | None = None,
         headers: dict[str, str] | None = None,
-        auth: str | tuple[str, str] | None = None,
-        legacy_auth: tuple[str, str] | None = None,
+        auth: AuthHandler | None = None,
+        verify_ssl: bool = True,
+        proxy: ProxyConfig = None,
+        no_proxy: NoProxyConfig = None,
         timeout: float = 30.0,
         session: Any = None,
         **kwargs: Any,
     ) -> None:
-        super().__init__(**kwargs)
+        if auth is not None and not isinstance(auth, AuthHandler):
+            raise TypeError("auth must be an AuthHandler instance.")
+        super().__init__(resource_type=resource_type, **kwargs)
         self.base_url = base_url.rstrip("/")
+        self.headers = dict(headers or {})
+        self.verify_ssl = verify_ssl
+        self.proxy = _normalize_proxies(proxy)
+        self.no_proxy = _normalize_no_proxy(no_proxy)
         self.timeout = timeout
-        self._session = session or UrlLibSession(headers=headers, auth=auth, legacy_auth=legacy_auth)
+        self._session = session or UrlLibSession(
+            headers=headers,
+            auth=auth,
+            verify_ssl=verify_ssl,
+            proxy=proxy,
+            no_proxy=no_proxy,
+        )
         self._owns_session = session is None
         self._closed = False
 
@@ -145,12 +248,12 @@ class Http(Base):
         *,
         params: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
-        json_body: Any = None,
+        data: bytes | BaseModel | dict[str, Any] | None = None,
     ) -> Any:
         if self._closed:
             raise DatasourceError("Datasource is closed.")
 
-        response = self._request(method, path, params=params, headers=headers, json_body=json_body)
+        response = self._request(method, path, params=params, headers=headers, data=data)
         if not 200 <= response.status_code < 300:
             self._raise_for_response(response)
 
@@ -168,21 +271,50 @@ class Http(Base):
         *,
         params: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
-        json_body: Any = None,
+        data: bytes | BaseModel | dict[str, Any] | None = None,
     ) -> HttpResponse:
+        if isinstance(data, (BaseModel, dict)):
+            data = self._serialize_object(data)
+            headers = dict(headers or {})
+            if "Content-Type" not in headers:
+                headers["Content-Type"] = "application/json"
         url = self._build_url(path, params=params)
         try:
             return self._session.request(
                 method,
                 url,
                 headers=headers,
-                json_body=json_body,
+                data=data,
                 timeout=self.timeout,
             )
         except HttpTransportError:
             raise
         except Exception as exc:
             raise HttpTransportError(f"HTTP request failed for {url}: {exc}") from exc
+
+    def _resource_url(self, *path_segments: str) -> str:
+        """Join ``path_segments`` onto the resource path.
+
+        Segments are stripped of surrounding slashes before being quoted, and
+        empty segments are dropped, so ``_resource_url()`` yields the collection
+        URL itself. ``resource_path`` is stored without a trailing slash (an
+        empty one means raw mode), so the separator is added here. ``@`` is kept
+        literal because GSRS operation endpoints are named ``@validate`` and
+        ``@approve``.
+        """
+        base = (
+            f"{self.base_url}/{self.resource_path}"
+            if self.resource_path
+            else self.base_url
+        )
+        parts = [
+            quote(segment.strip("/"), safe="@")
+            for segment in path_segments
+            if segment.strip("/")
+        ]
+        if not parts:
+            return base
+        return f"{base}/{'/'.join(parts)}"
 
     def _build_url(self, path: str, *, params: dict[str, Any] | None = None) -> str:
         url = path if path.startswith("http://") or path.startswith("https://") else urljoin(
@@ -217,14 +349,25 @@ class Http(Base):
             payload=payload,
         )
 
+    def _serialize_object(self, obj: BaseModel | dict[str, Any]) -> bytes | None:
+        if isinstance(obj, Mapping):
+            return json.dumps(dict(obj)).encode("utf-8")
+        model_dump_json = getattr(obj, "model_dump_json", None)
+        if callable(model_dump_json):
+            return model_dump_json(by_alias=True, exclude_none=True).encode("utf-8")
+        legacy_dict = getattr(obj, "dict", None)
+        if callable(legacy_dict):
+            return legacy_dict(by_alias=True, exclude_none=True).encode("utf-8")
+        raise ResourceTypeError(f"Object of type {type(obj).__name__} cannot be serialized.")
+
     def _paginate(
         self,
         path: str,
         *,
         params: dict[str, Any] | None = None,
         page_size: int = 50,
-    ):
-        current_path = path
+    ) -> Iterator[dict[str, Any]]:
+        current_path: str | None = path
         current_params = dict(params or {})
         current_params.setdefault("top", page_size)
         current_params.setdefault("skip", 0)
@@ -278,14 +421,17 @@ class Http(Base):
                     total = value
                     break
 
+            # An explicit total is authoritative: keep paging until it is
+            # reached, even when the server returns a short page.
             if total is not None:
                 current_skip = int(current_params.get("skip", 0))
                 if current_skip + item_count >= total:
                     return None
-
-        page_size = int(current_params.get("top", item_count))
-        if item_count < page_size:
-            return None
+            else:
+                # Without a total, treat a short page as the last one.
+                page_size = int(current_params.get("top", item_count))
+                if item_count < page_size:
+                    return None
 
         next_params = dict(current_params)
         next_params["skip"] = int(current_params.get("skip", 0)) + item_count
@@ -297,8 +443,11 @@ class Http(Base):
         next_path = parsed.path
         if base_path and next_path.startswith(base_path):
             next_path = next_path[len(base_path) :]
+        elif base_path in next_path:
+            next_path = next_path.split(base_path, 1)[-1]
         parsed_query = parse_qs(parsed.query, keep_blank_values=True)
         next_params = {
             key: values if len(values) > 1 else values[0] for key, values in parsed_query.items()
         }
         return next_path.lstrip("/"), next_params
+

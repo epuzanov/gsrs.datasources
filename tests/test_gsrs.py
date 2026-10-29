@@ -49,6 +49,14 @@ def install_gsrs_model_stub():
             "selfLink": ModelField(alias="_self"),
         }
 
+        @classmethod
+        def _resource_path(cls):
+            return "substances"
+
+        @classmethod
+        def _id_field(cls):
+            return "uuid"
+
     class Product(StubModel):
         model_fields = {
             "productContainer": ModelField(),
@@ -57,6 +65,14 @@ def install_gsrs_model_stub():
             "productManufactureItems": ModelField(),
             "selfLink": ModelField(alias="_self"),
         }
+
+        @classmethod
+        def _resource_path(cls):
+            return "products"
+
+        @classmethod
+        def _id_field(cls):
+            return "id"
 
     module.Substance = Substance
     module.Product = Product
@@ -70,9 +86,14 @@ def install_gsrs_model_stub():
 
 Substance, Product = install_gsrs_model_stub()
 
-from gsrs.datasources import Gsrs, ValidationLink, ValidationMessage, ValidationResponse
+from gsrs.datasources import (
+    Gsrs,
+    LegacyAuthHandler,
+    ValidationLink,
+    ValidationMessage,
+    ValidationResponse,
+)
 from gsrs.datasources.http import UrlLibSession
-
 
 SUBSTANCE_PAYLOAD = {
     "uuid": "00000000-0000-0000-0000-000000000001",
@@ -124,22 +145,28 @@ class FakeResponse:
 
 
 class FakeSession:
+    """Captures requests and delegates to ``handler``.
+
+    ``Http._request`` passes a pre-serialized JSON body through the ``data``
+    keyword, so the signature mirrors that of :class:`UrlLibSession`.
+    """
+
     def __init__(self, handler):
         self._handler = handler
         self.calls = []
         self.close_calls = 0
 
-    def request(self, method, url, *, headers=None, json_body=None, timeout=None):
+    def request(self, method, url, *, headers=None, data=None, timeout=None):
         self.calls.append(
             {
                 "method": method,
                 "url": url,
                 "headers": headers or {},
-                "json_body": json_body,
+                "data": data,
                 "timeout": timeout,
             }
         )
-        return self._handler(method, url, headers=headers or {}, json_body=json_body, timeout=timeout)
+        return self._handler(method, url, headers=headers or {}, data=data, timeout=timeout)
 
     def close(self):
         self.close_calls += 1
@@ -167,6 +194,8 @@ class FakeUrlLibResponse:
         self._url = url
         self.headers = FakeHeaders({"Content-Type": "application/json"})
         self.status = 200
+        self.code = 200
+        self.msg = "OK"
 
     def __enter__(self):
         return self
@@ -180,41 +209,47 @@ class FakeUrlLibResponse:
     def geturl(self):
         return self._url
 
+    def info(self):
+        return self.headers
+
     def read(self):
         return self._body
 
 
 class GsrsDatasourceTests(unittest.TestCase):
-    def test_model_class_is_required_for_hydration(self):
-        import gsrs
-
-        original_module = sys.modules["gsrs.model"]
-        replacement = types.ModuleType("gsrs.model")
-        replacement.Product = getattr(original_module, "Product", None)
-
-        sys.modules["gsrs.model"] = replacement
-        gsrs.__dict__["model"] = replacement
-        self.addCleanup(sys.modules.__setitem__, "gsrs.model", original_module)
-        self.addCleanup(gsrs.__dict__.__setitem__, "model", original_module)
-
+    def test_raw_mode_passes_payloads_through_unchanged(self):
         datasource = Gsrs(
-            resourceType="Substance",
             base_url="https://example.test/api/v1",
             session=FakeSession(lambda method, url, **kwargs: FakeResponse(payload=SUBSTANCE_PAYLOAD, url=url)),
         )
 
-        with self.assertRaisesRegex(AttributeError, "does not define 'Substance'"):
-            datasource.get(SUBSTANCE_PAYLOAD["uuid"])
+        self.assertIsNone(datasource.resource_type)
+        self.assertIsNone(datasource.id_field)
+        self.assertEqual(datasource.resource_path, "")
+        self.assertEqual(datasource.get(SUBSTANCE_PAYLOAD["uuid"]), SUBSTANCE_PAYLOAD)
 
-    def test_resource_type_validation(self):
-        with self.assertRaisesRegex(ValueError, "Unsupported resourceType"):
-            Gsrs(
-                resourceType="Invalid",
-                base_url="https://example.test/api/v1",
-                session=FakeSession(lambda *args, **kwargs: None),
-            )
+    def test_resource_type_accepts_a_model_class(self):
+        datasource = Gsrs(
+            resourceType=Substance,
+            base_url="https://example.test/api/v1",
+            session=FakeSession(lambda *args, **kwargs: None),
+        )
 
-    def test_search_returns_uuid_list(self):
+        self.assertIs(datasource.resource_type, Substance)
+        self.assertEqual(datasource.resource_path, "substances")
+        self.assertEqual(datasource.id_field, "uuid")
+
+    def test_resource_type_defaults_id_field_per_model(self):
+        datasource = Gsrs(
+            resourceType=Product,
+            base_url="https://example.test/api/v1",
+            session=FakeSession(lambda *args, **kwargs: None),
+        )
+
+        self.assertEqual(datasource.resource_path, "products")
+        self.assertEqual(datasource.id_field, "id")
+
+    def test_search_returns_id_strings(self):
         def handler(method, url, **kwargs):
             parsed = urlparse(url)
             query = parse_qs(parsed.query)
@@ -222,25 +257,25 @@ class GsrsDatasourceTests(unittest.TestCase):
             if skip == 0:
                 payload = {
                     "content": [
-                        {"uuid": "00000000-0000-0000-0000-000000000001"},
-                        {"uuid": "00000000-0000-0000-0000-000000000002"},
+                        {"idString": "00000000-0000-0000-0000-000000000001"},
+                        {"idString": "00000000-0000-0000-0000-000000000002"},
                     ],
-                    "count": 3,
+                    "total": 3,
                 }
             else:
                 payload = {
-                    "content": [{"uuid": "00000000-0000-0000-0000-000000000003"}],
-                    "count": 3,
+                    "content": [{"idString": "00000000-0000-0000-0000-000000000003"}],
+                    "total": 3,
                 }
             return FakeResponse(payload=payload, url=url)
 
         datasource = Gsrs(
-            resourceType="Substance",
+            resourceType=Substance,
             base_url="https://example.test/api/v1",
             session=FakeSession(handler),
         )
 
-        result = datasource.search("name:example", page_size=2)
+        result = datasource.search("name:example")
 
         self.assertEqual(
             result,
@@ -251,28 +286,41 @@ class GsrsDatasourceTests(unittest.TestCase):
             ],
         )
 
-    def test_search_supports_gsrs_view_param(self):
+    def test_search_requests_the_key_view_and_pages_by_fifty(self):
         def handler(method, url, **kwargs):
             return FakeResponse(
-                payload={"content": [{"uuid": "00000000-0000-0000-0000-000000000001"}], "count": 1},
+                payload={"content": [{"idString": "abc"}], "count": 1},
                 url=url,
             )
 
         session = FakeSession(handler)
         datasource = Gsrs(
-            resourceType="Substance",
+            resourceType=Substance,
             base_url="https://example.test/api/v1",
             session=session,
         )
 
-        datasource.search(
-            "name:example",
-            view=Gsrs.VIEW_COMPACT,
-        )
+        datasource.search("name:example")
 
         parsed = urlparse(session.calls[0]["url"])
         query = parse_qs(parsed.query)
-        self.assertEqual(query["view"], [Gsrs.VIEW_COMPACT])
+        self.assertEqual(parsed.path, "/api/v1/substances/search")
+        self.assertEqual(query["q"], ["name:example"])
+        self.assertEqual(query["view"], ["key"])
+        self.assertEqual(query["top"], ["50"])
+
+    def test_search_rejects_a_result_without_an_id_string(self):
+        def handler(method, url, **kwargs):
+            return FakeResponse(payload={"content": [{"uuid": "abc"}], "count": 1}, url=url)
+
+        datasource = Gsrs(
+            resourceType=Substance,
+            base_url="https://example.test/api/v1",
+            session=FakeSession(handler),
+        )
+
+        with self.assertRaisesRegex(ValueError, "idString"):
+            datasource.search("name:example")
 
     def test_iterate_yields_typed_objects_and_raw_payloads(self):
         def handler(method, url, **kwargs):
@@ -283,41 +331,54 @@ class GsrsDatasourceTests(unittest.TestCase):
                     payload={"content": [dict(PRODUCT_PAYLOAD, uuid="product-uuid")], "count": 1},
                     url=url,
                 )
+            if urlparse(url).path.endswith("/search"):
+                # Raw mode has no entity segment, so requests hit base_url directly.
+                return FakeResponse(
+                    payload={"content": [dict(PRODUCT_PAYLOAD, uuid="product-uuid")], "count": 1},
+                    url=url,
+                )
             raise AssertionError(f"Unexpected URL {url}")
 
         substance_datasource = Gsrs(
-            resourceType="Substance",
+            resourceType=Substance,
             base_url="https://example.test/api/v1",
             session=FakeSession(handler),
         )
         product_datasource = Gsrs(
-            resourceType="Product",
+            resourceType=Product,
+            base_url="https://example.test/api/v1",
+            session=FakeSession(handler),
+        )
+        raw_datasource = Gsrs(
             base_url="https://example.test/api/v1",
             session=FakeSession(handler),
         )
 
         typed = list(substance_datasource.iterate("name:example"))
-        raw = list(product_datasource.iterate("name:example", raw=True))
+        raw = list(raw_datasource.iterate("name:example"))
 
         self.assertEqual(len(typed), 1)
         self.assertIsInstance(typed[0], Substance)
         self.assertEqual(typed[0].uuid, "00000000-0000-0000-0000-000000000001")
         self.assertEqual(raw, [dict(PRODUCT_PAYLOAD, uuid="product-uuid")])
+        self.assertIsInstance(product_datasource.iterate("name:example").__next__(), Product)
 
     def test_get_supports_raw_and_typed_results(self):
         def handler(method, url, **kwargs):
-            if "/substances/" not in url:
-                raise AssertionError(f"Unexpected URL {url}")
             return FakeResponse(payload=SUBSTANCE_PAYLOAD, url=url)
 
-        datasource = Gsrs(
-            resourceType="Substance",
+        typed_datasource = Gsrs(
+            resourceType=Substance,
+            base_url="https://example.test/api/v1",
+            session=FakeSession(handler),
+        )
+        raw_datasource = Gsrs(
             base_url="https://example.test/api/v1",
             session=FakeSession(handler),
         )
 
-        raw = datasource.get(SUBSTANCE_PAYLOAD["uuid"], raw=True)
-        typed = datasource.get(SUBSTANCE_PAYLOAD["uuid"])
+        raw = raw_datasource.get(SUBSTANCE_PAYLOAD["uuid"])
+        typed = typed_datasource.get(SUBSTANCE_PAYLOAD["uuid"])
 
         self.assertEqual(raw, SUBSTANCE_PAYLOAD)
         self.assertIsInstance(typed, Substance)
@@ -329,7 +390,7 @@ class GsrsDatasourceTests(unittest.TestCase):
             return FakeResponse(payload=PRODUCT_PAYLOAD, url=url)
 
         datasource = Gsrs(
-            resourceType="Product",
+            resourceType=Product,
             base_url="https://example.test/api/v1",
             session=FakeSession(handler),
         )
@@ -340,27 +401,55 @@ class GsrsDatasourceTests(unittest.TestCase):
         self.assertEqual(product.productContainer, "Bottle")
         self.assertEqual(product.selfLink, PRODUCT_PAYLOAD["_self"])
 
-    def test_save_supports_view_param(self):
+    def test_save_posts_to_the_collection_and_casts_the_result(self):
         def handler(method, url, **kwargs):
             return FakeResponse(payload=SUBSTANCE_PAYLOAD, url=url)
 
         session = FakeSession(handler)
         datasource = Gsrs(
-            resourceType="Substance",
+            resourceType=Substance,
             base_url="https://example.test/api/v1",
             session=session,
         )
 
         saved = datasource.save(
-            dict(SUBSTANCE_PAYLOAD, resourceType="Substance"),
-            update=True,
-            view=Gsrs.VIEW_KEY,
+            {"uuid": None, "substanceClass": "concept"},
         )
 
-        parsed = urlparse(session.calls[0]["url"])
-        query = parse_qs(parsed.query)
-        self.assertEqual(query["view"], [Gsrs.VIEW_KEY])
-        self.assertEqual(saved["_self"], SUBSTANCE_PAYLOAD["_self"])
+        self.assertEqual(session.calls[0]["method"], "POST")
+        self.assertEqual(urlparse(session.calls[0]["url"]).path, "/api/v1/substances")
+        self.assertNotIn("view", parse_qs(urlparse(session.calls[0]["url"]).query))
+        self.assertEqual(session.calls[0]["headers"]["Content-Type"], "application/json")
+        self.assertIsInstance(saved, Substance)
+        self.assertEqual(saved.selfLink, SUBSTANCE_PAYLOAD["_self"])
+
+    def test_save_puts_to_the_identified_record(self):
+        def handler(method, url, **kwargs):
+            if method == "GET":
+                return FakeResponse(payload=7, url=url)
+            return FakeResponse(payload=SUBSTANCE_PAYLOAD, url=url)
+
+        session = FakeSession(handler)
+        datasource = Gsrs(
+            resourceType=Substance,
+            base_url="https://example.test/api/v1",
+            session=session,
+        )
+
+        datasource.save({"uuid": SUBSTANCE_PAYLOAD["uuid"], "version": 1})
+
+        self.assertEqual(session.calls[0]["method"], "GET")
+        self.assertEqual(
+            urlparse(session.calls[0]["url"]).path,
+            f"/api/v1/substances/{SUBSTANCE_PAYLOAD['uuid']}/version",
+        )
+        self.assertEqual(session.calls[1]["method"], "PUT")
+        self.assertEqual(
+            urlparse(session.calls[1]["url"]).path,
+            f"/api/v1/substances/{SUBSTANCE_PAYLOAD['uuid']}",
+        )
+        payload = json.loads(session.calls[1]["data"])
+        self.assertEqual(payload["version"], 7)
 
     def test_validate_posts_to_validation_endpoint_and_returns_raw_response(self):
         validation_response = {
@@ -386,20 +475,19 @@ class GsrsDatasourceTests(unittest.TestCase):
 
         session = FakeSession(handler)
         datasource = Gsrs(
-            resourceType="Substance",
+            resourceType=Substance,
             base_url="https://example.test/api/v1",
             session=session,
         )
 
         result = datasource.validate(
             dict(SUBSTANCE_PAYLOAD, resourceType="Substance"),
-            view=Gsrs.VIEW_FULL,
         )
 
         parsed = urlparse(session.calls[0]["url"])
         query = parse_qs(parsed.query)
         self.assertEqual(parsed.path, "/api/v1/substances/@validate")
-        self.assertEqual(query["view"], [Gsrs.VIEW_FULL])
+        self.assertNotIn("view", query)
         self.assertIsInstance(result, ValidationResponse)
         self.assertTrue(result.valid)
         self.assertEqual(len(result.messages), 1)
@@ -412,27 +500,38 @@ class GsrsDatasourceTests(unittest.TestCase):
         self.assertFalse(result.messages[0].suggestedChange)
         self.assertFalse(result.messages[0].appliedChange)
         self.assertEqual(
-            session.calls[0]["json_body"]["resourceType"],
-            "Substance",
+            json.loads(session.calls[0]["data"])["substanceClass"],
+            "concept",
         )
 
-    def test_validate_marks_update_requests(self):
+    def test_validate_is_post_only(self):
         def handler(method, url, **kwargs):
+            if method != "POST":
+                raise AssertionError(f"Unexpected method {method}")
             return FakeResponse(payload={"valid": True}, url=url)
 
         session = FakeSession(handler)
         datasource = Gsrs(
-            resourceType="Substance",
+            resourceType=Substance,
             base_url="https://example.test/api/v1",
             session=session,
         )
 
-        datasource.validate(
-            dict(SUBSTANCE_PAYLOAD, resourceType="Substance"),
-            update=True,
+        datasource.validate(dict(SUBSTANCE_PAYLOAD, resourceType="Substance"))
+
+        self.assertEqual(session.calls[0]["method"], "POST")
+        query = parse_qs(urlparse(session.calls[0]["url"]).query)
+        self.assertEqual(query, {})
+
+    def test_validate_does_not_accept_an_update_flag(self):
+        datasource = Gsrs(
+            resourceType=Substance,
+            base_url="https://example.test/api/v1",
+            session=FakeSession(lambda *args, **kwargs: FakeResponse(payload={"valid": True})),
         )
 
-        self.assertEqual(session.calls[0]["json_body"]["_method"], "PUT")
+        with self.assertRaises(TypeError):
+            datasource.validate({"uuid": "abc"}, update=True)
 
     def test_validate_accepts_alternate_validation_field_names(self):
         def handler(method, url, **kwargs):
@@ -452,7 +551,7 @@ class GsrsDatasourceTests(unittest.TestCase):
             )
 
         datasource = Gsrs(
-            resourceType="Substance",
+            resourceType=Substance,
             base_url="https://example.test/api/v1",
             session=FakeSession(handler),
         )
@@ -492,7 +591,7 @@ class GsrsDatasourceTests(unittest.TestCase):
             )
 
         datasource = Gsrs(
-            resourceType="Substance",
+            resourceType=Substance,
             base_url="https://example.test/api/v1",
             session=FakeSession(handler),
         )
@@ -513,9 +612,59 @@ class GsrsDatasourceTests(unittest.TestCase):
         self.assertEqual(message.links[0].href, "/app/substance/51666-4")
         self.assertEqual(message.links[0].text, "[51666-4]Povidon K12")
 
+    def test_validate_uses_the_validate_endpoint(self):
+        def handler(method, url, **kwargs):
+            return FakeResponse(payload={"valid": True}, url=url)
+
+        datasource = Gsrs(
+            resourceType=Substance,
+            base_url="https://example.test/api/v1",
+            session=FakeSession(handler),
+        )
+
+        datasource.validate(dict(SUBSTANCE_PAYLOAD, resourceType="Substance"))
+
+        self.assertTrue(datasource.VALIDATE_PATH, "@validate")
+
+    def test_approve_calls_the_approve_endpoint_and_casts_the_result(self):
+        def handler(method, url, **kwargs):
+            return FakeResponse(payload=SUBSTANCE_PAYLOAD, url=url)
+
+        session = FakeSession(handler)
+        datasource = Gsrs(
+            resourceType=Substance,
+            base_url="https://example.test/api/v1",
+            session=session,
+        )
+
+        approved = datasource.approve(SUBSTANCE_PAYLOAD["uuid"])
+
+        self.assertEqual(session.calls[0]["method"], "GET")
+        self.assertEqual(
+            urlparse(session.calls[0]["url"]).path,
+            f"/api/v1/substances/{SUBSTANCE_PAYLOAD['uuid']}/@approve",
+        )
+        self.assertIsInstance(approved, Substance)
+
+    def test_raw_mode_resolves_requests_against_base_url(self):
+        def handler(method, url, **kwargs):
+            if urlparse(url).path.endswith("/search"):
+                return FakeResponse(payload={"content": [SUBSTANCE_PAYLOAD], "count": 1}, url=url)
+            return FakeResponse(payload=SUBSTANCE_PAYLOAD, url=url)
+
+        session = FakeSession(handler)
+        datasource = Gsrs(base_url="https://example.test/api/v1", session=session)
+
+        datasource.get("abc")
+        records = list(datasource.iterate("name:example"))
+
+        self.assertEqual(urlparse(session.calls[0]["url"]).path, "/api/v1/abc")
+        self.assertEqual(urlparse(session.calls[1]["url"]).path, "/api/v1/search")
+        self.assertEqual(records, [SUBSTANCE_PAYLOAD])
+
     def test_close_is_idempotent(self):
         session = FakeSession(lambda *args, **kwargs: FakeResponse(payload={"content": [], "count": 0}))
-        datasource = Gsrs(resourceType="Substance", base_url="https://example.test/api/v1", session=session)
+        datasource = Gsrs(resourceType=Substance, base_url="https://example.test/api/v1", session=session)
 
         datasource.close()
         datasource.close()
@@ -525,7 +674,7 @@ class GsrsDatasourceTests(unittest.TestCase):
     def test_urllib_session_supports_legacy_gsrs_auth_headers(self):
         opener = FakeHttpOpener()
         session = UrlLibSession(
-            legacy_auth=("legacy-user", "legacy-pass"),
+            auth=LegacyAuthHandler("legacy-user", "legacy-pass"),
             opener=opener,
         )
 
