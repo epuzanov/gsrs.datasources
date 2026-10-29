@@ -1,14 +1,14 @@
-"""HTTP datasource base and urllib session wrapper.
+"""HTTP client base and urllib session wrapper.
 
 This module is the top layer of the HTTP stack: :class:`UrlLibSession` sends
 requests through an :class:`~urllib.request.OpenerDirector` and :class:`Http`
 adds request and error helpers on top of it. Pagination is GSRS specific and
-lives in :mod:`gsrs.datasources.gsrs`.
+lives in :mod:`gsrs.client.gsrs`.
 
 Proxy and TLS plumbing lives in :mod:`gsrs.transport`, the response containers
 in :mod:`gsrs.responses`, and the authentication handlers and token provider in
 :mod:`gsrs.auth`. Those names are re-exported here so existing imports such as
-``from gsrs.datasources.http import AuthHandler`` keep working.
+``from gsrs.client.http import AuthHandler`` keep working.
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ from gsrs.auth import (
 )
 from gsrs.exceptions import (
     ApiResponseError,
-    DatasourceError,
+    ClientError,
     HttpRequestError,
     HttpTransportError,
     ResourceTypeError,
@@ -194,7 +194,7 @@ class UrlLibSession:
 
 
 class Http(Base):
-    """Reusable HTTP datasource base built on the standard library.
+    """Reusable HTTP client base built on the standard library.
 
     Requests are sent through :class:`UrlLibSession`. Set ``proxy`` to a proxy
     URL (or a mapping of scheme to proxy URL) to route them through a proxy,
@@ -251,7 +251,7 @@ class Http(Base):
         data: bytes | BaseModel | dict[str, Any] | None = None,
     ) -> Any:
         if self._closed:
-            raise DatasourceError("Datasource is closed.")
+            raise ClientError("Client is closed.")
 
         response = self._request(method, path, params=params, headers=headers, data=data)
         if not 200 <= response.status_code < 300:

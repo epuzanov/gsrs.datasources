@@ -20,8 +20,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-import gsrs.datasources
-from gsrs.datasources import (
+import gsrs.client
+from gsrs.client import (
     DEFAULT_SESSION_COOKIE_NAME,
     ApiKeyAuthHandler,
     AuthHandler,
@@ -38,7 +38,7 @@ from gsrs.datasources import (
     TokenAuthHandler,
     compute_gsrs_token,
 )
-from gsrs.datasources.http import UrlLibSession
+from gsrs.client.http import UrlLibSession
 from gsrs.exceptions import ApiResponseError, HttpRequestError
 from gsrs.transport import (
     _host_matches_no_proxy,
@@ -154,7 +154,7 @@ def oauth2_handler(opener=None, **overrides):
 
 
 class ConcreteHttp(Http):
-    """Minimal concrete Http datasource for exercising shared HTTP behavior."""
+    """Minimal concrete Http client for exercising shared HTTP behavior."""
 
     def get(self, id, version=None, template=None):
         return None
@@ -190,7 +190,7 @@ class ConcreteHttp(Http):
 
 
 class ConcreteGsrs(Gsrs):
-    """Gsrs datasource with the abstract approve() hook implemented."""
+    """Gsrs client with the abstract approve() hook implemented."""
 
     def approve(self, id):
         return None
@@ -511,18 +511,18 @@ class SslVerificationTests(unittest.TestCase):
         self.assertEqual(context.verify_mode, ssl.CERT_NONE)
         self.assertFalse(context.check_hostname)
 
-    def test_http_datasource_passes_verify_ssl_to_session(self):
-        datasource = ConcreteHttp(
+    def test_http_client_passes_verify_ssl_to_session(self):
+        client = ConcreteHttp(
             resourceType=Substance,
             base_url="https://example.test/api/v1",
             verify_ssl=False,
         )
-        self.addCleanup(datasource.close)
+        self.addCleanup(client.close)
 
-        self.assertFalse(datasource.verify_ssl)
-        self.assertIsInstance(datasource._session, UrlLibSession)
-        self.assertFalse(datasource._session.verify_ssl)
-        context = self.get_https_context(datasource._session._opener)
+        self.assertFalse(client.verify_ssl)
+        self.assertIsInstance(client._session, UrlLibSession)
+        self.assertFalse(client._session.verify_ssl)
+        context = self.get_https_context(client._session._opener)
         self.assertEqual(context.verify_mode, ssl.CERT_NONE)
         self.assertFalse(context.check_hostname)
 
@@ -695,57 +695,57 @@ class ProxyConfigurationTests(unittest.TestCase):
         self.assertEqual(proxy_handler.proxies["http"], "http://proxy.local:3128")
         self.assertEqual(handler._token.no_proxy, ("localhost",))
 
-    def test_http_datasource_passes_proxy_to_session(self):
-        datasource = ConcreteHttp(
+    def test_http_client_passes_proxy_to_session(self):
+        client = ConcreteHttp(
             resourceType=Substance,
             base_url="https://example.test/api/v1",
             proxy="http://proxy.local:3128",
             no_proxy="localhost",
         )
-        self.addCleanup(datasource.close)
+        self.addCleanup(client.close)
 
-        self.assertIsInstance(datasource._session, UrlLibSession)
+        self.assertIsInstance(client._session, UrlLibSession)
         self.assertEqual(
-            datasource.proxy,
+            client.proxy,
             {"http": "http://proxy.local:3128", "https": "http://proxy.local:3128"},
         )
-        self.assertEqual(datasource.no_proxy, ("localhost",))
-        proxy_handler = self.get_proxy_handler(datasource._session._opener)
+        self.assertEqual(client.no_proxy, ("localhost",))
+        proxy_handler = self.get_proxy_handler(client._session._opener)
         self.assertEqual(proxy_handler.proxies["https"], "http://proxy.local:3128")
 
 
-class OAuth2DatasourceTests(unittest.TestCase):
-    def test_http_datasource_uses_static_bearer_token(self):
+class OAuth2ClientTests(unittest.TestCase):
+    def test_http_client_uses_static_bearer_token(self):
         opener = make_opener(TokenIssuer())
         session = UrlLibSession(auth=BearerAuthHandler("static-token"), opener=opener)
-        datasource = ConcreteHttp(
+        client = ConcreteHttp(
             resourceType=Substance,
             base_url="https://example.test/api/v1",
             session=session,
         )
 
-        datasource._request_json("GET", "substances")
+        client._request_json("GET", "substances")
 
         self.assertEqual(
             request_headers(opener.requests[0]["request"])["authorization"],
             "Bearer static-token",
         )
 
-    def test_gsrs_datasource_configures_oauth2_handler(self):
+    def test_gsrs_client_configures_oauth2_handler(self):
         handler = OAuth2AuthHandler(oauth2_config())
-        datasource = ConcreteGsrs(
+        client = ConcreteGsrs(
             resourceType=Substance,
             base_url="https://example.test/api/v1",
             auth=handler,
         )
-        self.addCleanup(datasource.close)
+        self.addCleanup(client.close)
 
-        self.assertIs(datasource._session._auth, handler)
+        self.assertIs(client._session._auth, handler)
         self.assertIsInstance(handler, AuthHandler)
         self.assertIsInstance(handler, OAuth2AuthHandler)
         self.assertIsInstance(handler, AbstractBasicAuthHandler)
 
-    def test_gsrs_datasource_uses_oauth2_bearer_token(self):
+    def test_gsrs_client_uses_oauth2_bearer_token(self):
         issuer = TokenIssuer()
 
         def api_handler(request, timeout=None):
@@ -753,13 +753,13 @@ class OAuth2DatasourceTests(unittest.TestCase):
 
         opener = make_opener(issuer, api_handler)
         session = UrlLibSession(auth=oauth2_handler(opener), opener=opener)
-        datasource = ConcreteGsrs(
+        client = ConcreteGsrs(
             resourceType=Substance,
             base_url="https://example.test/api/v1",
             session=session,
         )
 
-        record = datasource.get("abc")
+        record = client.get("abc")
 
         self.assertEqual(record, {"uuid": "abc"})
         self.assertEqual(issuer.count, 1)
@@ -1085,10 +1085,10 @@ class GsrsLegacyAuthHandlerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             SessionCookieAuthHandler(header="")
 
-    def test_gsrs_datasource_accepts_token_auth(self):
+    def test_gsrs_client_accepts_token_auth(self):
         auth = TokenAuthHandler("computed-token")
         opener = make_opener(TokenIssuer())
-        datasource = ConcreteGsrs(
+        client = ConcreteGsrs(
             resourceType=Substance,
             base_url="https://example.test/api/v1",
             auth=auth,
@@ -1096,10 +1096,10 @@ class GsrsLegacyAuthHandlerTests(unittest.TestCase):
         )
 
         try:
-            self.assertIsInstance(datasource._session._auth_handlers[0], TokenAuthHandler)
-            self.assertIs(datasource._session._auth_handlers[0], auth)
+            self.assertIsInstance(client._session._auth_handlers[0], TokenAuthHandler)
+            self.assertIs(client._session._auth_handlers[0], auth)
         finally:
-            datasource.close()
+            client.close()
 
     def test_whoami_parses_string_role_names(self):
         def handler(request, timeout=None):
@@ -1114,7 +1114,7 @@ class GsrsLegacyAuthHandlerTests(unittest.TestCase):
             )
 
         session = UrlLibSession(auth=TokenAuthHandler("token"), opener=FakeOpener(handler))
-        datasource = ConcreteGsrs(
+        client = ConcreteGsrs(
             resourceType=Substance,
             base_url="https://example.test/api/v1",
             auth=TokenAuthHandler("token"),
@@ -1122,9 +1122,9 @@ class GsrsLegacyAuthHandlerTests(unittest.TestCase):
         )
 
         try:
-            payload = datasource.whoami()
+            payload = client.whoami()
         finally:
-            datasource.close()
+            client.close()
 
         self.assertEqual(payload.identifier, "ADMIN")
         self.assertEqual([role.role for role in payload.roles], ["Query", "Admin"])
@@ -1157,7 +1157,7 @@ class AuthModuleLayoutTests(unittest.TestCase):
         for name, module in self.HANDLERS.items():
             with self.subTest(name=name):
                 handler = getattr(auth_package, name)
-                self.assertIs(getattr(gsrs.datasources, name), handler)
+                self.assertIs(getattr(gsrs.client, name), handler)
                 self.assertEqual(handler.__module__, module)
 
     def test_constants_and_helpers_are_defined_in_the_auth_package(self):
@@ -1166,13 +1166,13 @@ class AuthModuleLayoutTests(unittest.TestCase):
         for name, module in self.CONSTANTS.items():
             with self.subTest(name=name):
                 value = getattr(auth_package, name)
-                self.assertIs(getattr(gsrs.datasources, name), value)
+                self.assertIs(getattr(gsrs.client, name), value)
         self.assertEqual(auth_package.compute_gsrs_token.__module__, "gsrs.auth.tokens")
         self.assertEqual(DEFAULT_SESSION_COOKIE_NAME, "ix.session")
 
     def test_http_module_reexports_the_auth_surface(self):
         import gsrs.auth as auth_package
-        import gsrs.datasources.http as http_module
+        import gsrs.client.http as http_module
 
         for name in (
             *self.HANDLERS,
@@ -1185,15 +1185,15 @@ class AuthModuleLayoutTests(unittest.TestCase):
                 self.assertIs(getattr(http_module, name), getattr(auth_package, name))
 
     def test_transport_types_stay_in_the_http_module(self):
-        import gsrs.datasources.http as http_module
+        import gsrs.client.http as http_module
 
         for name in ("Http", "UrlLibSession"):
             with self.subTest(name=name):
-                self.assertEqual(getattr(http_module, name).__module__, "gsrs.datasources.http")
+                self.assertEqual(getattr(http_module, name).__module__, "gsrs.client.http")
 
     def test_oauth2_token_lives_with_its_handler(self):
         import gsrs.auth as auth_package
-        import gsrs.datasources.http as http_module
+        import gsrs.client.http as http_module
 
         # ``OAuth2Token`` and ``OAuth2AuthHandler`` share a module, so neither
         # needs a deferred import of the other.
@@ -1203,7 +1203,7 @@ class AuthModuleLayoutTests(unittest.TestCase):
         self.assertIn("OAuth2Token", auth_package.__all__)
 
     def test_http_response_lives_in_the_responses_package(self):
-        import gsrs.datasources.http as http_module
+        import gsrs.client.http as http_module
         import gsrs.responses as responses_package
 
         response_type = responses_package.HttpResponse
@@ -1273,7 +1273,7 @@ class TransportModuleLayoutTests(unittest.TestCase):
                 )
 
     def test_http_module_reexports_the_transport_surface(self):
-        import gsrs.datasources.http as http_module
+        import gsrs.client.http as http_module
         import gsrs.transport as transport_package
 
         # ``http`` re-exports the pieces it actually uses; the remaining private
@@ -1300,7 +1300,7 @@ class TransportModuleLayoutTests(unittest.TestCase):
 
 
 class PackageLayeringTests(unittest.TestCase):
-    """``transport <- responses/auth <- datasources``, with no cycles."""
+    """``transport <- responses/auth <- client``, with no cycles."""
 
     ROOT = Path(__file__).resolve().parents[1] / "gsrs"
 
@@ -1310,7 +1310,7 @@ class PackageLayeringTests(unittest.TestCase):
         "gsrs.responses": set(),
         "gsrs.exceptions": set(),
         "gsrs.auth": {"gsrs.transport"},
-        "gsrs.datasources": {"gsrs.auth", "gsrs.transport", "gsrs.responses"},
+        "gsrs.client": {"gsrs.auth", "gsrs.transport", "gsrs.responses"},
     }
 
     #: Dependency-free leaf modules that any package may import.
@@ -1386,8 +1386,8 @@ class PackageLayeringTests(unittest.TestCase):
                             f"{module} must not import {target}",
                         )
 
-    def test_auth_package_is_importable_without_datasources(self):
-        self.assertNotIn("gsrs.datasources", self._imports(self.ROOT / "auth" / "oauth2.py"))
+    def test_auth_package_is_importable_without_client(self):
+        self.assertNotIn("gsrs.client", self._imports(self.ROOT / "auth" / "oauth2.py"))
 
 
 if __name__ == "__main__":

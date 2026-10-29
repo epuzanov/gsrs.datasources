@@ -8,15 +8,15 @@ This is the lowest layer of the HTTP stack. It is split by concern:
 * :mod:`gsrs.transport.handlers` - urllib handler implementations.
 * :mod:`gsrs.transport.opener` - opener construction.
 
-Nothing here depends on authentication or on the datasource classes, so both
-:mod:`gsrs.auth` and :mod:`gsrs.datasources.http` can import it without creating
+Nothing here depends on authentication or on the client classes, so both
+:mod:`gsrs.auth` and :mod:`gsrs.client.http` can import it without creating
 a cycle.
 """
 
 from __future__ import annotations
 
 # The private helpers below belong to this layer, but they are re-exported so
-# sibling modules (``gsrs.auth.oauth2``, ``gsrs.datasources.http``) can import
+# sibling modules (``gsrs.auth.oauth2``, ``gsrs.client.http``) can import
 # the transport surface from one place. ``noqa: F401`` marks the re-exports as
 # intentional.
 from .handlers import (  # noqa: F401

@@ -2,9 +2,9 @@ from pkgutil import extend_path
 
 __path__ = extend_path(__path__, __name__)
 
-from . import datasources
+from . import client
 
-__all__ = ["datasources", "model"]
+__all__ = ["client", "model"]
 
 
 def __getattr__(name: str):

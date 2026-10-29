@@ -11,10 +11,10 @@ __all__ = ["Base"]
 
 
 class Base(ABC):
-    """Common datasource contract.
+    """Common client contract.
 
     ``resourceType`` is the model class that API payloads are cast to. When it
-    is ``None`` the datasource is untyped: every payload is returned as raw
+    is ``None`` the client is untyped: every payload is returned as raw
     JSON and requests are resolved against ``base_url`` without an entity
     segment. When a class is given, payloads are cast to that class.
     """
@@ -54,7 +54,7 @@ class Base(ABC):
 
     @abstractmethod
     def close(self) -> None:
-        """Release any datasource resources."""
+        """Release any client resources."""
 
     @abstractmethod
     def get(

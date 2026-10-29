@@ -12,7 +12,7 @@ from .http import Http
 
 
 class Gsrs(Http):
-    """Datasource for the GSRS API.
+    """Client for the GSRS API.
 
     Endpoint suffixes for the GSRS-specific operations are kept as class
     attributes so subclasses and tests can override them.

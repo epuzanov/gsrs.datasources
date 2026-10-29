@@ -1,9 +1,9 @@
-"""Authentication handlers for the GSRS HTTP datasources.
+"""Authentication handlers for the GSRS HTTP clients.
 
 Every supported authentication method is an :class:`AuthHandler` subclass that
 injects the headers GSRS expects into outgoing requests. Handlers are built on
 :class:`urllib.request.BaseHandler`, so they can be registered in any urllib
-opener; :class:`gsrs.datasources.http.UrlLibSession` registers the ``auth``
+opener; :class:`gsrs.client.http.UrlLibSession` registers the ``auth``
 handler it is given and reuses it for the whole session.
 
 The package is split by authentication mode:

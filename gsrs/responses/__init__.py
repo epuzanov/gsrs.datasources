@@ -3,7 +3,7 @@
 Two kinds of models live here:
 
 * :class:`HttpResponse` (in :mod:`gsrs.responses.http`) is the plain transport
-  response returned by :class:`gsrs.datasources.http.UrlLibSession`.
+  response returned by :class:`gsrs.client.http.UrlLibSession`.
 * The pydantic models for GSRS API payloads: :mod:`gsrs.responses.whoami` and
   :mod:`gsrs.responses.validation`.
 """

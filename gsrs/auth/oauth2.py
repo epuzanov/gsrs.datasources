@@ -1,7 +1,7 @@
 """OAuth2 authentication: the token provider and its bearer handler.
 
 The provider and the handler live together so the handler can use the provider
-without importing :mod:`gsrs.datasources.http`, and the provider reaches the
+without importing :mod:`gsrs.client.http`, and the provider reaches the
 proxy/TLS helpers through the lower :mod:`gsrs.transport` layer.
 """
 

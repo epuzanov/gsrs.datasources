@@ -1,12 +1,12 @@
-# gsrs.datasources
+# gsrs.client
 
-`gsrs.datasources` provides datasource implementations for the `gsrs` Python
+`gsrs.client` provides client implementations for the `gsrs` Python
 namespace package.
 
 ## What is included
 
-- `Gsrs`: a GSRS API datasource with search, iteration, fetch, validate, and save helpers.
-- `Http`: a reusable HTTP datasource base built on the Python standard library.
+- `Gsrs`: a GSRS API client with search, iteration, fetch, validate, and save helpers.
+- `Http`: a reusable HTTP client base built on the Python standard library.
 - `AuthHandler`, `BasicAuthHandler`, `BearerAuthHandler`, `LegacyAuthHandler`,
   and `OAuth2AuthHandler`: urllib request handlers for static headers, HTTP
   Basic credentials stored in an `HTTPPasswordMgr`, static bearer tokens, GSRS
@@ -18,11 +18,11 @@ namespace package.
 - `compute_gsrs_token`: helper that derives a GSRS `auth-token` from a username
   and API key.
 - `OAuth2Token`: an OAuth2 bearer token provider with caching and automatic refresh.
-- `Db`: a placeholder database datasource stub for future implementation.
+- `Db`: a placeholder database client stub for future implementation.
 - `ValidationResponse`, `ValidationMessage`, and `ValidationLink`: pydantic models for GSRS validation output.
 
 `resourceType` is a `gsrs.model` class, and it controls both the endpoint the
-datasource talks to and the type it returns: `Gsrs(resourceType=Substance, ...)`
+client talks to and the type it returns: `Gsrs(resourceType=Substance, ...)`
 requests `/substances` and casts every payload to `gsrs.model.Substance`.
 Passing `resourceType=None` (the default) selects raw mode, where records come
 back as plain dictionaries and requests are resolved directly against
@@ -32,7 +32,7 @@ accepted as well; both spellings are equivalent.
 The implementation also supports GSRS-specific API conventions documented by
 the GSRS project, including JSON views and legacy `auth-username` /
 `auth-password` header-based authentication. Views are not exposed as a
-datasource argument: each operation picks the view GSRS requires (`key` for
+client argument: each operation picks the view GSRS requires (`key` for
 `search`, `full` for `get` and `iterate`), and `save`, `validate`, and `approve`
 send no view at all.
 
@@ -55,13 +55,13 @@ downwards. Every package is decomposed into one module per concern:
 | --- | --- | --- |
 | `gsrs.transport` | `proxy`, `tls`, `headers`, `handlers`, `opener` | Lowest layer: proxy and `no_proxy` normalization, TLS context creation, response-header helpers, the `urllib` handler subclasses, and opener construction. Imports nothing else from the project. |
 | `gsrs.responses` | `http`, `whoami`, `validation` | Data containers: the transport-level `HttpResponse` plus the pydantic GSRS API models (`WhoAmIResponse`, `ValidationResponse`, ...). |
-| `gsrs.exceptions` | `exceptions` | Dependency-free exception hierarchy (`DatasourceError`, `HttpRequestError`, ...) that any layer may import. |
+| `gsrs.exceptions` | `exceptions` | Dependency-free exception hierarchy (`ClientError`, `HttpRequestError`, ...) that any layer may import. |
 | `gsrs.auth` | `base`, `tokens`, `basic`, `token_header`, `api_key`, `sso`, `session`, `bearer`, `oauth2` | The GSRS authentication handlers, `compute_gsrs_token`, and the `OAuth2Token` provider. Builds on `transport` and `exceptions`. |
-| `gsrs.datasources` | `base`, `http`, `gsrs`, `db` | `Base` (the abstract contract), `Http` (requests and pagination), `Gsrs` (GSRS operations), and the `Db` stub, on top of `auth`, `responses`, and `transport`. |
+| `gsrs.client` | `base`, `http`, `gsrs`, `db` | `Base` (the abstract contract), `Http` (requests and pagination), `Gsrs` (GSRS operations), and the `Db` stub, on top of `auth`, `responses`, and `transport`. |
 
-`gsrs.datasources.http` still re-exports the public names it builds on, so
-imports such as `from gsrs.datasources.http import AuthHandler` keep working.
-In application code, import from `gsrs.datasources`.
+`gsrs.client.http` still re-exports the public names it builds on, so
+imports such as `from gsrs.client.http import AuthHandler` keep working.
+In application code, import from `gsrs.client`.
 
 
 ## Installation
@@ -69,7 +69,7 @@ In application code, import from `gsrs.datasources`.
 Install the package:
 
 ```bash
-pip install gsrs-datasources
+pip install gsrs-client
 ```
 
 Install the companion `gsrs.model` package in the same environment before using
@@ -85,36 +85,36 @@ pip install -e .
 
 ```python
 from gsrs.model import Substance
-from gsrs.datasources import Gsrs, LegacyAuthHandler, ValidationResponse
+from gsrs.client import Gsrs, LegacyAuthHandler, ValidationResponse
 
-datasource = Gsrs(
+client = Gsrs(
     resourceType=Substance,
     base_url="https://example.test/api/v1",
     auth=LegacyAuthHandler("username", "password"),
 )
 
-identifiers = datasource.search("name:aspirin")
-substance = datasource.get(identifiers[0])
-validation: ValidationResponse = datasource.validate(substance)
+identifiers = client.search("name:aspirin")
+substance = client.get(identifiers[0])
+validation: ValidationResponse = client.validate(substance)
 
-for substance in datasource.iterate("name:aspirin"):
+for substance in client.iterate("name:aspirin"):
     print(substance)
 
-datasource.close()
+client.close()
 ```
 
 `substance` above is hydrated through `gsrs.model.Substance`, and `validation`
 is a typed GSRS validation response with structured `messages`.
 
-Use a second datasource when you want the untyped API payload:
+Use a second client when you want the untyped API payload:
 
 ```python
-raw_datasource = Gsrs(
+raw_client = Gsrs(
     base_url="https://example.test/api/v1",
     auth=LegacyAuthHandler("username", "password"),
 )
 
-raw_record = raw_datasource.get(identifiers[0])
+raw_record = raw_client.get(identifiers[0])
 ```
 
 `raw_record` is the plain dictionary returned by the API; `get`, `iterate`,
@@ -131,9 +131,9 @@ HTTP Basic credentials are stored in an `HTTPPasswordMgr` and sent by
 
 ```python
 from gsrs.model import Substance
-from gsrs.datasources import BasicAuthHandler, Gsrs
+from gsrs.client import BasicAuthHandler, Gsrs
 
-datasource = Gsrs(
+client = Gsrs(
     resourceType=Substance,
     base_url="https://example.test/api/v1",
     auth=BasicAuthHandler("username", "password"),
@@ -145,9 +145,9 @@ GSRS legacy `auth-username` / `auth-password` headers are sent by
 
 ```python
 from gsrs.model import Substance
-from gsrs.datasources import Gsrs, LegacyAuthHandler
+from gsrs.client import Gsrs, LegacyAuthHandler
 
-datasource = Gsrs(
+client = Gsrs(
     resourceType=Substance,
     base_url="https://example.test/api/v1",
     auth=LegacyAuthHandler("username", "password"),
@@ -158,24 +158,24 @@ Use `BearerAuthHandler` when you already have an OAuth2 access token:
 
 ```python
 from gsrs.model import Substance
-from gsrs.datasources import BearerAuthHandler, Gsrs
+from gsrs.client import BearerAuthHandler, Gsrs
 
-datasource = Gsrs(
+client = Gsrs(
     resourceType=Substance,
     base_url="https://example.test/api/v1",
     auth=BearerAuthHandler("eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."),
 )
 ```
 
-Use `OAuth2AuthHandler` to let the datasource obtain and refresh tokens. The
+Use `OAuth2AuthHandler` to let the client obtain and refresh tokens. The
 default `client_credentials` grant authenticates the client with HTTP Basic
 auth:
 
 ```python
 from gsrs.model import Substance
-from gsrs.datasources import Gsrs, OAuth2AuthHandler, OAuth2Token
+from gsrs.client import Gsrs, OAuth2AuthHandler, OAuth2Token
 
-datasource = Gsrs(
+client = Gsrs(
     resourceType=Substance,
     base_url="https://example.test/api/v1",
     auth=OAuth2AuthHandler(
@@ -194,7 +194,7 @@ datasource = Gsrs(
 deployments that issue tokens for a user:
 
 ```python
-datasource = Gsrs(
+client = Gsrs(
     resourceType=Substance,
     base_url="https://example.test/api/v1",
     auth=OAuth2AuthHandler(
@@ -214,9 +214,9 @@ Arbitrary authentication headers can be sent with the base `AuthHandler`:
 
 ```python
 from gsrs.model import Substance
-from gsrs.datasources import AuthHandler, Gsrs
+from gsrs.client import AuthHandler, Gsrs
 
-datasource = Gsrs(
+client = Gsrs(
     resourceType=Substance,
     base_url="https://example.test/api/v1",
     auth=AuthHandler({"X-API-Key": "secret-key"}),
@@ -249,9 +249,9 @@ in the headers your SSO proxy is configured to trust
 
 ```python
 from gsrs.model import Substance
-from gsrs.datasources import Gsrs, SsoHeaderAuthHandler
+from gsrs.client import Gsrs, SsoHeaderAuthHandler
 
-datasource = Gsrs(
+client = Gsrs(
     resourceType=Substance,
     base_url="https://gsrs.example.test/api/v1",
     auth=SsoHeaderAuthHandler(
@@ -276,18 +276,18 @@ cookie from the `Set-Cookie` response header:
 
 ```python
 from gsrs.model import Substance
-from gsrs.datasources import Gsrs, LegacyAuthHandler, SessionCookieAuthHandler
+from gsrs.client import Gsrs, LegacyAuthHandler, SessionCookieAuthHandler
 
 auth = SessionCookieAuthHandler(credentials=LegacyAuthHandler("user", "secret"))
-datasource = Gsrs(
+client = Gsrs(
     resourceType=Substance,
     base_url="https://gsrs.example.test/api/v1",
     auth=auth,
 )
 
-datasource.whoami()  # logs in and captures ix.session
+client.whoami()  # logs in and captures ix.session
 print(auth.session_id)
-datasource.whoami()  # reuses the cookie, credentials stay available as fallback
+client.whoami()  # reuses the cookie, credentials stay available as fallback
 ```
 
 GSRS only creates a session for an already authenticated request, so the
@@ -305,9 +305,9 @@ response), so it keeps working while the canonical timestamp rolls over:
 
 ```python
 from gsrs.model import Substance
-from gsrs.datasources import ComputedTokenAuthHandler, Gsrs
+from gsrs.client import ComputedTokenAuthHandler, Gsrs
 
-datasource = Gsrs(
+client = Gsrs(
     resourceType=Substance,
     base_url="https://gsrs.example.test/api/v1",
     auth=ComputedTokenAuthHandler("gsrs-user", "BPwnt6sw8yTSfOqjjhNr"),
@@ -320,9 +320,9 @@ to refresh short lived tokens per request:
 
 ```python
 from gsrs.model import Substance
-from gsrs.datasources import Gsrs, TokenAuthHandler
+from gsrs.client import Gsrs, TokenAuthHandler
 
-datasource = Gsrs(
+client = Gsrs(
     resourceType=Substance,
     base_url="https://gsrs.example.test/api/v1",
     auth=TokenAuthHandler(lambda: fetch_current_token()),
@@ -341,9 +341,9 @@ need the token value itself, and `time_resolution_ms` matches
 
 ```python
 from gsrs.model import Substance
-from gsrs.datasources import ApiKeyAuthHandler, Gsrs
+from gsrs.client import ApiKeyAuthHandler, Gsrs
 
-datasource = Gsrs(
+client = Gsrs(
     resourceType=Substance,
     base_url="https://gsrs.example.test/api/v1",
     auth=ApiKeyAuthHandler("BPwnt6sw8yTSfOqjjhNr", username="gsrs-user"),
@@ -358,13 +358,13 @@ alone.
 
 `Http`, `Gsrs`, and `OAuth2Token` accept `verify_ssl` (default `True`). Set it to
 `False` to accept self-signed or otherwise unverified TLS certificates. Configure
-it on the datasource for API requests and on `OAuth2Token` for token requests:
+it on the client for API requests and on `OAuth2Token` for token requests:
 
 ```python
 from gsrs.model import Substance
-from gsrs.datasources import Gsrs, OAuth2AuthHandler, OAuth2Token
+from gsrs.client import Gsrs, OAuth2AuthHandler, OAuth2Token
 
-datasource = Gsrs(
+client = Gsrs(
     resourceType=Substance,
     base_url="https://gsrs.example.test/api/v1",
     verify_ssl=False,
@@ -379,7 +379,7 @@ datasource = Gsrs(
 )
 ```
 
-When you pass your own `session` to a datasource or your own `opener` to
+When you pass your own `session` to a client or your own `opener` to
 `OAuth2Token`, that object is responsible for its TLS configuration and
 `verify_ssl` has no effect.
 
@@ -391,9 +391,9 @@ proxy URL. A proxy URL without a scheme defaults to `http`:
 
 ```python
 from gsrs.model import Substance
-from gsrs.datasources import Gsrs, OAuth2AuthHandler, OAuth2Token
+from gsrs.client import Gsrs, OAuth2AuthHandler, OAuth2Token
 
-datasource = Gsrs(
+client = Gsrs(
     resourceType=Substance,
     base_url="https://gsrs.example.test/api/v1",
     proxy="http://proxy.example.test:3128",

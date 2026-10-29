@@ -1,4 +1,4 @@
-"""Placeholder database datasource.
+"""Placeholder database client.
 
 The class reserves the :class:`Base` contract for a future SQL implementation;
 no method here is implemented yet.
@@ -15,14 +15,14 @@ from .base import Base
 
 __all__ = ["Db"]
 
-NOT_IMPLEMENTED_MESSAGE = "Db datasource is not implemented yet."
+NOT_IMPLEMENTED_MESSAGE = "Db client is not implemented yet."
 
 
 class Db(Base):
-    """Stub datasource for a database backend.
+    """Stub client for a database backend.
 
     Every operation raises :class:`NotImplementedError`; the class exists so the
-    datasource contract has a documented placeholder.
+    client contract has a documented placeholder.
     """
 
     def __init__(self, resource_type: type | None = None, **kwargs: Any) -> None:

@@ -1,8 +1,8 @@
-"""Exception hierarchy shared by the datasource packages.
+"""Exception hierarchy shared by the client packages.
 
 This module is a dependency-free leaf: it imports nothing from the rest of the
 package so that every other module -- ``gsrs.transport``, ``gsrs.responses``,
-``gsrs.auth`` and ``gsrs.datasources`` -- can depend on it without creating an
+``gsrs.auth`` and ``gsrs.client`` -- can depend on it without creating an
 import cycle.
 """
 
@@ -12,26 +12,26 @@ from typing import Any
 
 __all__ = [
     "ApiResponseError",
-    "DatasourceError",
+    "ClientError",
     "HttpRequestError",
     "HttpTransportError",
     "ResourceTypeError",
 ]
 
 
-class DatasourceError(Exception):
-    """Base exception for datasource errors."""
+class ClientError(Exception):
+    """Base exception for client errors."""
 
 
 class ResourceTypeError(ValueError):
     """Raised when an unsupported logical resource type is requested."""
 
 
-class HttpTransportError(DatasourceError):
+class HttpTransportError(ClientError):
     """Raised when an HTTP request cannot be completed."""
 
 
-class HttpRequestError(DatasourceError):
+class HttpRequestError(ClientError):
     """Raised when an HTTP request returns an error response."""
 
     def __init__(
@@ -48,5 +48,5 @@ class HttpRequestError(DatasourceError):
         self.payload = payload
 
 
-class ApiResponseError(DatasourceError):
+class ApiResponseError(ClientError):
     """Raised when the API responds with an unexpected payload."""

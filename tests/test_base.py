@@ -7,10 +7,10 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from gsrs.datasources import Base, Db
+from gsrs.client import Base, Db
 
 
-class MinimalDatasource(Base):
+class MinimalClient(Base):
     """Concrete :class:`Base` implementing the abstract contract."""
 
     def close(self) -> None:
@@ -68,71 +68,71 @@ class BaseContractTests(unittest.TestCase):
             Base(resource_type=TypedModel)
 
     def test_raw_mode_uses_empty_resource_path(self):
-        datasource = MinimalDatasource()
+        client = MinimalClient()
 
-        self.assertIsNone(datasource.resource_type)
-        self.assertIsNone(datasource.id_field)
-        self.assertEqual(datasource.resource_path, "")
+        self.assertIsNone(client.resource_type)
+        self.assertIsNone(client.id_field)
+        self.assertEqual(client.resource_path, "")
 
         payload = {"a": 1}
-        self.assertIs(datasource._cast_payload(payload), payload)
+        self.assertIs(client._cast_payload(payload), payload)
 
     def test_resource_type_derives_path_and_id_field(self):
-        datasource = MinimalDatasource(resource_type=TypedModel)
+        client = MinimalClient(resource_type=TypedModel)
 
-        self.assertIs(datasource.resource_type, TypedModel)
-        self.assertEqual(datasource.resource_path, "substances")
-        self.assertEqual(datasource.id_field, "uuid")
+        self.assertIs(client.resource_type, TypedModel)
+        self.assertEqual(client.resource_path, "substances")
+        self.assertEqual(client.id_field, "uuid")
         self.assertEqual(
-            datasource._cast_payload({"a": 1}),
+            client._cast_payload({"a": 1}),
             (TypedModel, {"a": 1}),
         )
 
     def test_resource_type_without_hooks_falls_back_to_raw_mode(self):
-        datasource = MinimalDatasource(resource_type=UntypedModel)
+        client = MinimalClient(resource_type=UntypedModel)
 
-        self.assertIs(datasource.resource_type, UntypedModel)
-        self.assertEqual(datasource.resource_path, "")
-        self.assertIsNone(datasource.id_field)
+        self.assertIs(client.resource_type, UntypedModel)
+        self.assertEqual(client.resource_path, "")
+        self.assertIsNone(client.id_field)
 
     def test_explicit_resource_path_and_id_field_win(self):
-        datasource = MinimalDatasource(
+        client = MinimalClient(
             resource_type=TypedModel,
             resource_path="/products/",
             id_field="id",
         )
 
-        self.assertEqual(datasource.resource_path, "products")
-        self.assertEqual(datasource.id_field, "id")
+        self.assertEqual(client.resource_path, "products")
+        self.assertEqual(client.id_field, "id")
 
     def test_cast_payload_returns_none_unchanged(self):
-        datasource = MinimalDatasource(resource_type=TypedModel)
+        client = MinimalClient(resource_type=TypedModel)
 
-        self.assertIsNone(datasource._cast_payload(None))
+        self.assertIsNone(client._cast_payload(None))
 
     def test_db_stub_close_is_idempotent(self):
-        datasource = Db(resource_type=TypedModel)
+        client = Db(resource_type=TypedModel)
 
-        datasource.close()
-        datasource.close()
+        client.close()
+        client.close()
 
-        self.assertTrue(datasource._closed)
+        self.assertTrue(client._closed)
 
     def test_db_stub_methods_exist(self):
-        datasource = Db(resource_type=TypedModel)
+        client = Db(resource_type=TypedModel)
 
         with self.assertRaises(NotImplementedError):
-            datasource.get("abc")
+            client.get("abc")
         with self.assertRaises(NotImplementedError):
-            datasource.search("name:aspirin")
+            client.search("name:aspirin")
         with self.assertRaises(NotImplementedError):
-            next(datasource.iterate())
+            next(client.iterate())
         with self.assertRaises(NotImplementedError):
-            datasource.save({"resourceType": "Substance"})
+            client.save({"resourceType": "Substance"})
         with self.assertRaises(NotImplementedError):
-            datasource.validate({"resourceType": "Substance"})
+            client.validate({"resourceType": "Substance"})
         with self.assertRaises(NotImplementedError):
-            datasource.approve("abc")
+            client.approve("abc")
 
 
 if __name__ == "__main__":
